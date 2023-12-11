@@ -3,6 +3,9 @@
         "stdio.h": "c",
         "errno.h": "c",
         "data.h": "c",
-        "decl.h": "c"
+        "decl.h": "c",
+        "defs.h": "c",
+        "stdlib.h": "c",
+        "stddef.h": "c"
     }
 }
