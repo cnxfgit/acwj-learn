@@ -1,324 +1,515 @@
-# Part 5: Statements
+# Part 6: Variables
 
-It's time to add some "proper" statements to the grammar of our language.
-I want to be able to write lines of code like this:
+I've just finished adding global variables to the compiler and, as I
+suspected, it was a lot of work. Also, pretty much every file in the
+compiler got modified in the process. So this part of the journey is
+going to be long.
 
-```
-   print 2 + 3 * 5;
-   print 18 - 6/3 + 4*2;
-```
+## What Do We Want from Variables?
 
-Of course, as we are ignoring whitespace, there's no necessity that
-all the tokens for one statement are on the same line. Each statement
-starts with the keyword `print` and is terminated with a semicolon. So
-these are going to become new tokens in our language.
+We want to be able to:
 
-## BNF Description of the Grammar
+ + Declare variables
+ + Use variables to get stored values
+ + Assign to variables
 
-We've already seen the BNF notation  for expressions. Now let's define
-the BNF syntax for the above types of statements:
+Here is `input02` which will be our test program:
 
 ```
-statements: statement
-     | statement statements
-     ;
-
-statement: 'print' expression ';'
-     ;
+int fred;
+int jim;
+fred= 5;
+jim= 12;
+print fred + jim;
 ```
 
-An input file consists of several statements. They are either one statement,
-or a statement followed by more statements. Each statement starts with the
-keyword `print`, then one expression, then a semicolon.
+The most obvious change is that the grammar now has
+variable declarations, assignment statements and variables names in
+expressions. However, before we get to that, let's look at how we
+implement variables.
 
-## Changes to the Lexical Scanner
+## The Symbol Table
 
-Before we can get to the code that parses the above syntax, we need to
-add a few more bits and pieces to the existing code. Let's start with
-the lexical scanner.
-
-Adding a token for semicolons will be easy. Now, the `print` keyword.
-Later on, we'll have many keywords in the language, plus identifiers
-for our variables, so we'll need to add some code which helps us to
-deal with them.
-
-In `scan.c`, I've added this code which I've borrowed from the SubC
-compiler. It reads in alphanumeric characters into a 
-buffer until it hits a non-alphanumeric character.
+Every compiler is going to need a
+[symbol table](https://en.wikipedia.org/wiki/Symbol_table). Later on,
+we will hold more than just global variables. But for now, here is
+the structure of an entry in the table (from `defs.h`):
 
 ```c
-// Scan an identifier from the input file and
-// store it in buf[]. Return the identifier's length
-static int scanident(int c, char *buf, int lim) {
-  int i = 0;
-
-  // Allow digits, alpha and underscores
-  while (isalpha(c) || isdigit(c) || '_' == c) {
-    // Error if we hit the identifier length limit,
-    // else append to buf[] and get next character
-    if (lim - 1 == i) {
-      printf("identifier too long on line %d\n", Line);
-      exit(1);
-    } else if (i < lim - 1) {
-      buf[i++] = c;
-    }
-    c = next();
-  }
-  // We hit a non-valid character, put it back.
-  // NUL-terminate the buf[] and return the length
-  putback(c);
-  buf[i] = '\0';
-  return (i);
-}
+// Symbol table structure
+struct symtable {
+  char *name;                   // Name of a symbol
+};
 ```
 
-We also need a function to recognise keywords in the language. One way
-would be to have a list of keywords, and to walk the list and `strcmp()`
-each one against the buffer from `scanident()`. The code from SubC has
-an optimisation: match against the first letter before doing the `strcmp()`.
-This speeds up the comparison against dozens of keywords. Right now we
-don't need this optimisation but I've put it in for later:
+We have an array of symbols in `data.h`:
 
 ```c
-// Given a word from the input, return the matching
-// keyword token number or 0 if it's not a keyword.
-// Switch on the first letter so that we don't have
-// to waste time strcmp()ing against all the keywords.
-static int keyword(char *s) {
-  switch (*s) {
-    case 'p':
-      if (!strcmp(s, "print"))
-        return (T_PRINT);
-      break;
-  }
-  return (0);
-}
+#define NSYMBOLS        1024            // Number of symbol table entries
+extern_ struct symtable Gsym[NSYMBOLS]; // Global symbol table
+static int Globs = 0;                   // Position of next free global symbol slot
 ```
 
-Now, at the bottom of the switch statement in `scan()`, we add this code
-to recognise semicolons and keywords:
+`Globs` is actually in `sym.c`, the file that manages the symbol table.
+In here we have these management functions:
+
+  + `int findglob(char *s)`: Determine if the symbol s is in the global
+     symbol table. Return its slot position or -1 if not found.
+  + `static int newglob(void)`: Get the position of a new global symbol
+     slot, or die if we've run out of positions.
+  + `int addglob(char *name)`: Add a global symbol to the symbol table.
+     Return the slot number in the symbol table.
+
+The code is fairly straight forward, so I won't bother to give the code
+here in the discussion. With these functions, we can find symbols and
+add new symbols to the symbol table.
+
+## Scanning and New Tokens
+
+If you look at the example input file, we need a few new tokens:
+
+  + 'int', known as T_INT
+  + '=', known as T_EQUALS
+  + identifier names, known as T_IDENT
+
+The scanning of '=' is easy to add to `scan()`:
 
 ```c
-    case ';':
-      t->token = T_SEMI;
-      break;
-    default:
+  case '=':
+    t->token = T_EQUALS; break;
+```
 
-      // If it's a digit, scan the
-      // literal integer value in
-      if (isdigit(c)) {
-        t->intvalue = scanint(c);
-        t->token = T_INTLIT;
+We can add the 'int' keyword to `keyword()`:
+
+```c
+  case 'i':
+    if (!strcmp(s, "int"))
+      return (T_INT);
+    break;
+```
+
+For identifiers, we are already using `scanident()` to store words into the
+`Text` variable. Instead of dying if a word is not a keyword, we can
+return a T_IDENT token:
+
+```c
+   if (isalpha(c) || '_' == c) {
+      // Read in a keyword or identifier
+      scanident(c, Text, TEXTLEN);
+
+      // If it's a recognised keyword, return that token
+      if (tokentype = keyword(Text)) {
+        t->token = tokentype;
         break;
-      } else if (isalpha(c) || '_' == c) {
-        // Read in a keyword or identifier
-        scanident(c, Text, TEXTLEN);
-
-        // If it's a recognised keyword, return that token
-        if (tokentype = keyword(Text)) {
-          t->token = tokentype;
-          break;
-        }
-        // Not a recognised keyword, so an error for now
-        printf("Unrecognised symbol %s on line %d\n", Text, Line);
-        exit(1);
       }
-      // The character isn't part of any recognised token, error
-      printf("Unrecognised character %c on line %d\n", c, Line);
-      exit(1);
-```
-
-I've also added a global `Text` buffer to store the keywords and
-identifiers:
-
-```c
-#define TEXTLEN         512             // Length of symbols in input
-extern_ char Text[TEXTLEN + 1];         // Last identifier scanned
-```
-
-## Changes to the Expression Parser
-
-Up to now our input files have contained just a single expression; therefore,
-in our Pratt parser code in `binexpr()` (in `expr.c`), we had this code to
-exit the parser:
-
-```c
-  // If no tokens left, return just the left node
-  tokentype = Token.token;
-  if (tokentype == T_EOF)
-    return (left);
-```
-
-With our new grammar, each expression is terminated by a semicolon. Thus,
-we need to change the code in the expression parser to spot the `T_SEMI`
-tokens and exit the expression parsing:
-
-```c
-// Return an AST tree whose root is a binary operator.
-// Parameter ptp is the previous token's precedence.
-struct ASTnode *binexpr(int ptp) {
-  struct ASTnode *left, *right;
-  int tokentype;
-
-  // Get the integer literal on the left.
-  // Fetch the next token at the same time.
-  left = primary();
-
-  // If we hit a semicolon, return just the left node
-  tokentype = Token.token;
-  if (tokentype == T_SEMI)
-    return (left);
-
-    while (op_precedence(tokentype) > ptp) {
-      ...
-
-          // Update the details of the current token.
-    // If we hit a semicolon, return just the left node
-    tokentype = Token.token;
-    if (tokentype == T_SEMI)
-      return (left);
+      // Not a recognised keyword, so it must be an identifier
+      t->token = T_IDENT;
+      break;
     }
-}
 ```
 
-## Changes to the Code Generator
+## The New Grammar
 
-I want to keep the generic code generator in `gen.c`
-separate from the CPU-specific code in `cg.c`. That also means
-that the rest of the compiler should only ever call the functions in
-`gen.c`, and only `gen.c` should call the code in `cg.c`.
+We're about ready to look at the changes to the grammar of our input
+language. As before, I'll define it with BNF notation:
 
-To this end, I've defined some new "front-end" functions in `gen.c`:
+```
+ statements: statement
+      |      statement statements
+      ;
 
-```c
-void genpreamble()        { cgpreamble(); }
-void genpostamble()       { cgpostamble(); }
-void genfreeregs()        { freeall_registers(); }
-void genprintint(int reg) { cgprintint(reg); }
+ statement: 'print' expression ';'
+      |     'int'   identifier ';'
+      |     identifier '=' expression ';'
+      ;
+
+ identifier: T_IDENT
+      ;
 ```
 
-## Adding the Parser for Statements
-
-We have a new file `stmt.c`. This will hold the parsing code for all
-the main statements in our language. Right now, we need to parse the
-BNF grammar for statements which I gave up above. This is done with
-this single function. I've converted the recursive definition into
-a loop:
+An identifier is returned as a T_IDENT token, and we already have the code
+to parse print statements. But, as we now have three types of statements,
+it makes sense to write a  function to deal with each one. Our top-level
+`statements()` function in `stmt.c` now looks like:
 
 ```c
 // Parse one or more statements
 void statements(void) {
-  struct ASTnode *tree;
-  int reg;
 
   while (1) {
-    // Match a 'print' as the first token
-    match(T_PRINT, "print");
-
-    // Parse the following expression and
-    // generate the assembly code
-    tree = binexpr(0);
-    reg = genAST(tree);
-    genprintint(reg);
-    genfreeregs();
-
-    // Match the following semicolon
-    // and stop if we are at EOF
-    semi();
-    if (Token.token == T_EOF)
+    switch (Token.token) {
+    case T_PRINT:
+      print_statement();
+      break;
+    case T_INT:
+      var_declaration();
+      break;
+    case T_IDENT:
+      assignment_statement();
+      break;
+    case T_EOF:
       return;
+    default:
+      fatald("Syntax error, token", Token.token);
+    }
   }
 }
 ```
 
-In each loop, the code finds a T_PRINT token. It then calls `binexpr()` to
-parse the expression. Finally, it finds the T_SEMI token. If a T_EOF token
-follows, we break out of the loop.
+I've moved the old print statement code into `print_statement()` and
+you can browse that yourself.
 
-After each expression tree, the code in `gen.c` is called to convert
-the tree into assembly code and to call the assembly `printint()` function
-to print out the final value.
+## Variable Declarations
 
-## Some Helper Functions
-
-There are a couple of new helper functions in the above code, which I've put
-into a new file, `misc.c`:
+Let's look at variable declarations. This
+is in a new file, `decl.c`, as we are going to have lots of other types
+of declarations in the future.
 
 ```c
-// Ensure that the current token is t,
-// and fetch the next token. Otherwise
-// throw an error 
-void match(int t, char *what) {
-  if (Token.token == t) {
-    scan(&Token);
-  } else {
-    printf("%s expected on line %d\n", what, Line);
-    exit(1);
+// Parse the declaration of a variable
+void var_declaration(void) {
+
+  // Ensure we have an 'int' token followed by an identifier
+  // and a semicolon. Text now has the identifier's name.
+  // Add it as a known identifier
+  match(T_INT, "int");
+  ident();
+  addglob(Text);
+  genglobsym(Text);
+  semi();
+}
+```
+
+The `ident()` and `semi()` functions are wrappers around `match()`:
+
+```c
+void semi(void)  { match(T_SEMI, ";"); }
+void ident(void) { match(T_IDENT, "identifier"); }
+```
+
+Back to `var_declaration()`, once we have scanned in the idenfiier into
+the `Text` buffer, we can add this to the global symbol table with
+`addglob(Text)`. The code in there allows a variable to be declared
+multiple times (for now).
+
+## Assignment Statements
+
+Here's the code for `assignment_statement()` in `stmt.c`:
+
+```c
+void assignment_statement(void) {
+  struct ASTnode *left, *right, *tree;
+  int id;
+
+  // Ensure we have an identifier
+  ident();
+
+  // Check it's been defined then make a leaf node for it
+  if ((id = findglob(Text)) == -1) {
+    fatals("Undeclared variable", Text);
   }
-}
+  right = mkastleaf(A_LVIDENT, id);
 
-// Match a semicon and fetch the next token
-void semi(void) {
-  match(T_SEMI, ";");
+  // Ensure we have an equals sign
+  match(T_EQUALS, "=");
+
+  // Parse the following expression
+  left = binexpr(0);
+
+  // Make an assignment AST tree
+  tree = mkastnode(A_ASSIGN, left, right, 0);
+
+  // Generate the assembly code for the assignment
+  genAST(tree, -1);
+  genfreeregs();
+
+  // Match the following semicolon
+  semi();
 }
 ```
 
-These form part of the syntax checking in the parser. Later on, I'll add
-more short functions to call `match()` to make our syntax checking easier.
+We have a couple of new AST node types. A_ASSIGN takes the expression in
+the left-hand child and assigns it to the right-hand child. And the
+right-hand child will be an A_LVIDENT node.
 
-## Changes to `main()`
+Why did I call this node *A_LVIDENT*? Because it represents an *lvalue*
+identifier. So what's an
+[lvalue](https://en.wikipedia.org/wiki/Value_(computer_science)#lrvalue)?
 
-`main()` used to call `binexpr()` directly to parse the single expression
-in the old input files. Now it does this:
+An lvalue is a value that is tied to a specific location. Here, it's the
+address in memory which holds a variable's value. When we do:
+
+```
+   area = width * height;
+```
+
+we *assign* the result of the right-hand side (i.e. the *rvalue*) to the
+variable in the left-hand side (i.e. the *lvalue*). The *rvalue* isn't tied
+to a specific location. Here, the expression result is probably in some
+arbitrary register.
+
+Also note that, although the assignment statement has the syntax
+
+```
+  identifier '=' expression ';'
+```
+
+we will make the expression the left sub-tree of the A_ASSIGN node
+and save the A_LVIDENT details in the right sub-tree. Why? Because
+we need to evaluate the expression *before* we save it into the variable.
+
+## Changes to the AST Structure
+
+We now need to store either an integer literal value in A_INTLIT AST nodes, or
+the details of the symbol for A_IDENT AST nodes. I've added a *union* to the
+AST structure to do this (in `defs.h`):
 
 ```c
-  scan(&Token);                 // Get the first token from the input
-  genpreamble();                // Output the preamble
-  statements();                 // Parse the statements in the input
-  genpostamble();               // Output the postamble
-  fclose(Outfile);              // Close the output file and exit
-  exit(0);
+// Abstract Syntax Tree structure
+struct ASTnode {
+  int op;                       // "Operation" to be performed on this tree
+  struct ASTnode *left;         // Left and right child trees
+  struct ASTnode *right;
+  union {
+    int intvalue;               // For A_INTLIT, the integer value
+    int id;                     // For A_IDENT, the symbol slot number
+  } v;
+};
 ```
+
+## Generating the Assignment Code
+
+Let's now look at the changes to `genAST()` in `gen.c`
+
+```c
+int genAST(struct ASTnode *n, int reg) {
+  int leftreg, rightreg;
+
+  // Get the left and right sub-tree values
+  if (n->left)
+    leftreg = genAST(n->left, -1);
+  if (n->right)
+    rightreg = genAST(n->right, leftreg);
+
+  switch (n->op) {
+  ...
+    case A_INTLIT:
+    return (cgloadint(n->v.intvalue));
+  case A_IDENT:
+    return (cgloadglob(Gsym[n->v.id].name));
+  case A_LVIDENT:
+    return (cgstorglob(reg, Gsym[n->v.id].name));
+  case A_ASSIGN:
+    // The work has already been done, return the result
+    return (rightreg);
+  default:
+    fatald("Unknown AST operator", n->op);
+  }
+
+```
+
+Note that we evaluate the left-hand AST child first, and we get back
+a register number that holds the left-hand sub-tree's value. We now
+pass this register number to the right-hand sub-tree. We need to do
+this for A_LVIDENT nodes, so that the `cgstorglob()` function in `cg.c`
+knows which register holds the rvalue result of the assignment expression.
+
+So, consider this AST tree:
+
+```
+           A_ASSIGN
+          /        \
+     A_INTLIT   A_LVIDENT
+        (3)        (5)
+```
+
+We call `leftreg = genAST(n->left, -1);` to evaluate the A_INTLIT operation.
+This will `return (cgloadint(n->v.intvalue));`, i.e. load a register with the
+value 3 and return the register id.
+
+Then, we call `rightreg = genAST(n->right, leftreg);` to evaluate the
+A_LVIDENT operation. This will
+`return (cgstorglob(reg, Gsym[n->v.id].name));`, i.e. store the
+register into the variable whose name is in `Gsym[5]`.
+
+Then we switch to the A_ASSIGN case. Well, all our work has already been done.
+The rvalue is still in a register, so let's leave it there and return it.
+Later, we'll be able to do expressions like:
+
+```
+  a= b= c = 0;
+```
+
+where an assignment is not just a statement but also an expression.
+
+## Generating x86-64 Code
+
+You would have noticed that I changed the name of the old `cgload()`
+function to `cgloadint()`. This is more specific. We now have a
+function to load the value out of a global variable (in `cg.c`):
+
+```c
+int cgloadglob(char *identifier) {
+  // Get a new register
+  int r = alloc_register();
+
+  // Print out the code to initialise it
+  fprintf(Outfile, "\tmovq\t%s(\%%rip), %s\n", identifier, reglist[r]);
+  return (r);
+}
+```
+
+Similarly, we need a function to save a register into a variable:
+
+```c
+// Store a register's value into a variable
+int cgstorglob(int r, char *identifier) {
+  fprintf(Outfile, "\tmovq\t%s, %s(\%%rip)\n", reglist[r], identifier);
+  return (r);
+}
+```
+
+We also need a function to create a new global integer variable:
+
+```c
+// Generate a global symbol
+void cgglobsym(char *sym) {
+  fprintf(Outfile, "\t.comm\t%s,8,8\n", sym);
+}
+```
+
+Of course, we can't let the parser access this code directly. Instead,
+there is a function in the generic code generator in `gen.c` 
+that acts as the interface:
+
+```c
+void genglobsym(char *s) { cgglobsym(s); }
+```
+
+## Variables in Expressions
+
+So now we can assign to variables. But how do we get a variable's value into
+an expression. Well, we already have a `primary()` function to get an
+integer literal. Let's modify it to also load a variable's value:
+
+```c
+// Parse a primary factor and return an
+// AST node representing it.
+static struct ASTnode *primary(void) {
+  struct ASTnode *n;
+  int id;
+
+  switch (Token.token) {
+  case T_INTLIT:
+    // For an INTLIT token, make a leaf AST node for it.
+    n = mkastleaf(A_INTLIT, Token.intvalue);
+    break;
+
+  case T_IDENT:
+    // Check that this identifier exists
+    id = findglob(Text);
+    if (id == -1)
+      fatals("Unknown variable", Text);
+
+    // Make a leaf AST node for it
+    n = mkastleaf(A_IDENT, id);
+    break;
+
+  default:
+    fatald("Syntax error, token", Token.token);
+  }
+
+  // Scan in the next token and return the leaf node
+  scan(&Token);
+  return (n);
+}
+```
+
+Note the syntax checking in the T_IDENT case to ensure the variable has
+been declared before we try to use it.
+
+Also note that the AST leaf node that *retrieves* a variable's value is
+an A_IDENT node. The leaf that saves into a variable is an A_LVIDENT node.
+This is the difference between *rvalues* and *lvalues*.
 
 ## Trying It Out
 
-That's about it for the new and changed code. Let's give the new code
-a whirl. Here is the new input file, `input01`:
+I think that's about it for variable declarations, so let's try it out
+with the `input02` file:
 
 ```
-print 12 * 3;
-print 
-   18 - 2
-      * 4; print
-1 + 2 +
-  9 - 5/2 + 3*5;
+int fred;
+int jim;
+fred= 5;
+jim= 12;
+print fred + jim;
 ```
 
-Yes I've decided to check that we have have tokens spread out across multiple
-lines. To compile and run the input file, do a `make test`:
+We can `make test` to do this:
 
-```make
+```
 $ make test
-cc -o comp1 -g cg.c expr.c gen.c main.c misc.c scan.c stmt.c tree.c
-./comp1 input01
+cc -o comp1 -g cg.c decl.c expr.c gen.c main.c misc.c scan.c
+               stmt.c sym.c tree.c
+...
+./comp1 input02
 cc -o out out.s
 ./out
-36
-10
-25
+17
 ```
 
-And it works!
+As you can see, we calculated `fred + jim` which is 5 + 12 or 17.
+Here are the new assembly lines in `out.s`:
+
+```
+        .comm   fred,8,8                # Declare fred
+        .comm   jim,8,8                 # Declare jim
+        ...
+        movq    $5, %r8
+        movq    %r8, fred(%rip)         # fred = 5
+        movq    $12, %r8
+        movq    %r8, jim(%rip)          # jim = 12
+        movq    fred(%rip), %r8
+        movq    jim(%rip), %r9
+        addq    %r8, %r9                # fred + jim
+```
+
+## Other Changes
+
+I've probably made a few other changes. The only main one that I can
+remember is to create some helper functions in `misc.c` to make it
+easier to report fatal errors:
+
+```c
+// Print out fatal messages
+void fatal(char *s) {
+  fprintf(stderr, "%s on line %d\n", s, Line); exit(1);
+}
+
+void fatals(char *s1, char *s2) {
+  fprintf(stderr, "%s:%s on line %d\n", s1, s2, Line); exit(1);
+}
+
+void fatald(char *s, int d) {
+  fprintf(stderr, "%s:%d on line %d\n", s, d, Line); exit(1);
+}
+
+void fatalc(char *s, int c) {
+  fprintf(stderr, "%s:%c on line %d\n", s, c, Line); exit(1);
+}
+```
 
 ## Conclusion and What's Next
 
-We've added our first "real" statement grammar to our language. I've defined
-it in BNF notation, but it was easier to implement it with a loop and not
-recursively. Don't worry, we'll go back to doing recursive parsing soon.
+So that was a lot of work. We had to write the beginnings of symbol
+table management. We had to deal with two new statement types. We
+had to add some new tokens and some new AST node types. Finally, we
+had to add some code to generate the correct x86-64 assembly output.
 
-Along the way we had to modify the scanner, add support for keywords and
-identifiers, and to more cleanly separate the generic code generator and
-the CPU-specific generator.
+Try writing a few example input files and see if the compiler works
+as it should, especially if it detects syntax errors and semantic
+errors (variable use without a declaration).
 
-In the next part of our compiler writing journey, we will add variables
-to the language. This will require a significant amount of work. [Next step](../06_Variables/Readme.md)
+In the next part of our compiler writing journey, we will
+add the six comparison operators to our language. That will
+allow us to start on the control structures in the part after that. [Next step](../07_Comparisons/Readme.md)
