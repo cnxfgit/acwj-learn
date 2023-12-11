@@ -1,437 +1,374 @@
-# Part 3: Operator Precedence
+# Part 4: An Actual Compiler
 
-We saw in the previous part of our compiler writing journey that a parser
-doesn't necessarily enforce the semantics of our language. It only
-enforces the syntax and structural rules of the grammar.
+It's about time that I met my promise of actually writing a compiler.
+So in this part of the journey we are going to replace the interpreter
+in our program with code that generates x86-64 assembly code.
 
-We ended up with code that calculates the wrong value of expressions
-like `2 * 3 + 4 * 5`, because the code created an AST that looks like:
+## Revising the Interpreter
 
-```
-     *
-    / \
-   2   +
-      / \
-     3   *
-        / \
-       4   5
-```
-
-instead of:
-
-
-```
-          +
-         / \
-        /   \
-       /     \
-      *       *
-     / \     / \
-    2   3   4   5
-```
-
-To solve this, we have to add code to our parser to perform operator
-precedence. There are (at least) two ways of doing this:
-
- + Making the operator precedence explicit in the language's grammar
- + Influencing the existing parser with an operator precedence table
-
-## Making the Operator Precedence Explicit
-
-Here is our grammar from the last part of the journey:
-
-
-```
-expression: number
-          | expression '*' expression
-          | expression '/' expression
-          | expression '+' expression
-          | expression '-' expression
-          ;
-
-number:  T_INTLIT
-         ;
-```
-
-Note that there is no differentiation between any of the four maths
-operators. Let's tweak the grammar so that there is a difference:
-
-
-```
-expression: additive_expression
-    ;
-
-additive_expression:
-      multiplicative_expression
-    | additive_expression '+' multiplicative_expression
-    | additive_expression '-' multiplicative_expression
-    ;
-
-multiplicative_expression:
-      number
-    | number '*' multiplicative_expression
-    | number '/' multiplicative_expression
-    ;
-
-number:  T_INTLIT
-         ;
-```
-
-We now have two types of expressions: *additive* expressions and
-*multiplicative* expressions. Note that the grammar now forces
-the numbers to be part of multiplicative expressions only. This
-forces the '*' and '/' operators to bind more tightly to the
-numbers on either side, thus having higher precedence.
-
-Any additive expression is actually either a multiplicative expression
-by itself, or an additive (i.e. multiplicative) expression followed
-by a '+' or '-' operator then another multiplicative expression.
-The additive expression is now at a much lower predencence than the
-multiplicative expression.
-
-## Doing The Above in the Recursive Descent Parser
-
-How do we take the above version of our grammar and implement it into
-our recursive descent parser? I've done this in the file `expr2.c` and
-I'll cover the code below.
-
-The answer is to have a `multiplicative_expr()` function to deal with the
-'*' and '/' operators, and an `additive_expr()` function to deal with the
-lower precedence '+' and '-' operators.
-
-Both functions are going to read in something and an operator.
-Then, while there are following operators at the same precedence,
-each function will parse some more of the input and combine the left
-and right halves with the first operator.
-
-However, `additive_expr()` will have to defer to the higher-precedence
-`multiplicative_expr()` function. Here is how this is done.
-
-## `additive_expr()`
+Before we do, it will be worthwhile to revisit the interpreter code
+in `interp.c`:
 
 ```c
-// Return an AST tree whose root is a '+' or '-' binary operator
-struct ASTnode *additive_expr(void) {
-  struct ASTnode *left, *right;
-  int tokentype;
+int interpretAST(struct ASTnode *n) {
+  int leftval, rightval;
 
-  // Get the left sub-tree at a higher precedence than us
-  left = multiplicative_expr();
+  if (n->left) leftval = interpretAST(n->left);
+  if (n->right) rightval = interpretAST(n->right);
 
-  // If no tokens left, return just the left node
-  tokentype = Token.token;
-  if (tokentype == T_EOF)
-    return (left);
+  switch (n->op) {
+    case A_ADD:      return (leftval + rightval);
+    case A_SUBTRACT: return (leftval - rightval);
+    case A_MULTIPLY: return (leftval * rightval);
+    case A_DIVIDE:   return (leftval / rightval);
+    case A_INTLIT:   return (n->intvalue);
 
-  // Loop working on token at our level of precedence
-  while (1) {
-    // Fetch in the next integer literal
-    scan(&Token);
-
-    // Get the right sub-tree at a higher precedence than us
-    right = multiplicative_expr();
-
-    // Join the two sub-trees with our low-precedence operator
-    left = mkastnode(arithop(tokentype), left, right, 0);
-
-    // And get the next token at our precedence
-    tokentype = Token.token;
-    if (tokentype == T_EOF)
-      break;
+    default:
+      fprintf(stderr, "Unknown AST operator %d\n", n->op);
+      exit(1);
   }
-
-  // Return whatever tree we have created
-  return (left);
 }
 ```
 
-Right at the beginning, we immediately call `multiplicative_expr()`
-in case the first operator is a high-precedence '*' or '/'. That
-function will only return when it encounters a low-precedence
-'+' or '-' operator.
+The `interpretAST()` function walks the given AST tree depth-first.
+It evaluates any left sub-tree, then the right sub-tree. Finally, it
+uses the `op` value at the base of the current tree to operate on
+these children.
 
-Thus, when we hit the `while` loop, we know we have a '+' or '-' operator.
-We loop until there are no tokens left in the input, i.e. when we hit
-the T_EOF token.
+If the `op` value is one of the four maths operators, then this maths
+operation is performed. If the `op` value indicates that the node
+is simply an integer literal, the literal value is return.
 
-Inside the loop, we call `multiplicative_expr()` again in case any
-future operators are higher precedence than us. Again, this will
-return when they are not.
+The function returns the final value for this tree. And, as it is
+recursive, it will calculate the final value for a whole tree
+one sub-sub-tree at a time.
 
-Once we have a left and right sub-tree, we can combine them with
-the operator we got the last time around the loop. This repeats, so that
-if we had the expression `2 + 4 + 6`, we would end up with the AST tree:
+## Changing to Assembly Code Generation
 
-``` 
-       +
-      / \
-     +   6
-    / \
-   2   4
-```
+We are going to write an assembly code generator which is generic.
+This is, in turn, going to call out to a set of CPU-specific code
+generation functions.
 
-But if `multiplicative_expr()` had its own higher precedence operators,
-we would be combining sub-trees with multiple nodes in them.
-
-## multiplicative_expr()
+Here is the generic assembly code generator in `gen.c`:
 
 ```c
-// Return an AST tree whose root is a '*' or '/' binary operator
-struct ASTnode *multiplicative_expr(void) {
-  struct ASTnode *left, *right;
-  int tokentype;
+// Given an AST, generate
+// assembly code recursively
+static int genAST(struct ASTnode *n) {
+  int leftreg, rightreg;
 
-  // Get the integer literal on the left.
-  // Fetch the next token at the same time.
-  left = primary();
+  // Get the left and right sub-tree values
+  if (n->left) leftreg = genAST(n->left);
+  if (n->right) rightreg = genAST(n->right);
 
-  // If no tokens left, return just the left node
-  tokentype = Token.token;
-  if (tokentype == T_EOF)
-    return (left);
+  switch (n->op) {
+    case A_ADD:      return (cgadd(leftreg,rightreg));
+    case A_SUBTRACT: return (cgsub(leftreg,rightreg));
+    case A_MULTIPLY: return (cgmul(leftreg,rightreg));
+    case A_DIVIDE:   return (cgdiv(leftreg,rightreg));
+    case A_INTLIT:   return (cgload(n->intvalue));
 
-  // While the token is a '*' or '/'
-  while ((tokentype == T_STAR) || (tokentype == T_SLASH)) {
-    // Fetch in the next integer literal
-    scan(&Token);
-    right = primary();
-
-    // Join that with the left integer literal
-    left = mkastnode(arithop(tokentype), left, right, 0);
-
-    // Update the details of the current token.
-    // If no tokens left, return just the left node
-    tokentype = Token.token;
-    if (tokentype == T_EOF)
-      break;
+    default:
+      fprintf(stderr, "Unknown AST operator %d\n", n->op);
+      exit(1);
   }
-
-  // Return whatever tree we have created
-  return (left);
 }
 ```
 
-The code is similar to `additive_expr()` except that we get to call
-`primary()` to get real integer literals! We also only loop when
-we have operators at our high precedence level, i.e. '*' and '/'
-operators. As soon as we hit a low precedence operator, we simply
-return the sub-tree that we've built to this point. This goes
-back to `additive_expr()` to deal with the low precedence operator.
+Looks familar, huh?! We are doing the same depth-first tree traversal.
+This time:
 
-## Drawbacks of the Above
+  + A_INTLIT: load a register with the literal value
+  + Other operators: perform a maths function on the two registers
+    that hold the left-child's and right-child's value
 
-The above way of constructing a recursive descent parser with
-explicit operator precedence can be inefficient because of
-all the function calls needed to reach the right level of precedence.
-There also has to be functions to deal with each level of operator
-precedence, so we end up with lots of lines of code.
+Instead of passing values, the code in `genAST()` passes around
+register identifiers. For example `cgload()` loads a value into a register and
+returns the identity of the register with the loaded value.
 
-## The Alternative: Pratt Parsing
-
-One way to cut down on the amount of code is to use a
-[Pratt parser](https://en.wikipedia.org/wiki/Pratt_parser)
-which has a table of precedence values associated with each token
-instead of having functions that replicate the explicit precedence in
-the grammar.
-
-At this point I highly recommend that you read
-[Pratt Parsers: Expression Parsing Made Easy](https://journal.stuffwithstuff.com/2011/03/19/pratt-parsers-expression-parsing-made-easy/)
-by Bob Nystrom. Pratt parsers still make my head hurt, so read as much
-as you can and get comfortable with the basic concept.
-
-## `expr.c`: Pratt Parsing
-
-I've implemented Pratt parsing in `expr.c` which is a drop-in replacement
-for `expr2.c`. Let's start the tour.
-
-Firstly, we need some code to determine the precedence levels for each
-token:
+`genAST()` itself returns the identity of the register that holds the final
+value of the tree at this point. That's why the code at the top is
+getting register identities:
 
 ```c
-// Operator precedence for each token
-static int OpPrec[] = { 0, 10, 10, 20, 20,    0 };
-//                     EOF  +   -   *   /  INTLIT
+  if (n->left) leftreg = genAST(n->left);
+  if (n->right) rightreg = genAST(n->right);
+```
 
-// Check that we have a binary operator and
-// return its precedence.
-static int op_precedence(int tokentype) {
-  int prec = OpPrec[tokentype];
-  if (prec == 0) {
-    fprintf(stderr, "syntax error on line %d, token %d\n", Line, tokentype);
-    exit(1);
-  }
-  return (prec);
+## Calling `genAST()`
+
+`genAST()` is only going to calculate the value of the expression given to
+it. We need to print out this final calculation. We're also going to need
+to wrap the assembly code we generate with some leading code (the
+*preamble*) and some trailing code (the *postamble*). This is done with
+the other function in `gen.c`:
+
+```c
+void generatecode(struct ASTnode *n) {
+  int reg;
+
+  cgpreamble();
+  reg= genAST(n);
+  cgprintint(reg);      // Print the register with the result as an int
+  cgpostamble();
 }
 ```
 
-Higher numbers (e.g. 20) mean a higher precedence than lower numbers
-(e.g. 10).
+## The x86-64 Code Generator
 
-Now, you might ask: why have a function when you have a look-up table called
-`OpPrec[]`? The answer is: to spot syntax errors.
+That's the generic code generator out of the road. Now we need to look
+at the generation of some real assembly code. For now, I'm targetting
+the x86-64 CPU as this is still one of the most common Linux platforms.
+So, open up `cg.c` and let's get browsing.
 
-Consider an input that looks like `234 101 + 12`. We can scan in the
-first two tokens. But if we simply used `OpPrec[]` to get the precedence of the
-second `101` token, we wouldn't notice that it isn't an operator. Thus,
-the `op_precedence()` function enforces the correct grammar syntax.
+### Allocating Registers
 
-Now, instead of having a function for each precedence level, we have a
-single expression function that uses the table of operator precedences:
+Any CPU has a limited number of registers. We will have to allocate
+a register to hold the integer literal values, plus any calculation
+that we perform on them. However, once we've used a value, we can
+often discard the value and hence free up the register holding it.
+Then we can re-use that register for another value.
+
+There are three functions that deal with register allocation:
+
+ + `freeall_registers()`: Set all registers as available
+ + `alloc_register()`: Allocate a free register
+ + `free_register()`: Free an allocated register
+
+I'm not going to go through the code as it's straight forward but with
+some error checking. Right now, if I run out of registers then the
+program will crash. Later on, I'll deal with the situation when we have
+run out of free registers.
+
+The code works on generic registers: r0, r1, r2 and r3. There is a table
+of strings with the actual register names:
 
 ```c
-// Return an AST tree whose root is a binary operator.
-// Parameter ptp is the previous token's precedence.
-struct ASTnode *binexpr(int ptp) {
-  struct ASTnode *left, *right;
-  int tokentype;
+static char *reglist[4]= { "%r8", "%r9", "%r10", "%r11" };
+```
 
-  // Get the integer literal on the left.
-  // Fetch the next token at the same time.
-  left = primary();
+This makes these functions fairly independent of the CPU architecture.
 
-  // If no tokens left, return just the left node
-  tokentype = Token.token;
-  if (tokentype == T_EOF)
-    return (left);
+### Loading a Register
 
-  // While the precedence of this token is
-  // more than that of the previous token precedence
-  while (op_precedence(tokentype) > ptp) {
-    // Fetch in the next integer literal
-    scan(&Token);
+This is done in `cgload()`: a register is allocated, then a `movq`
+instruction loads a literal value into the allocated register.
 
-    // Recursively call binexpr() with the
-    // precedence of our token to build a sub-tree
-    right = binexpr(OpPrec[tokentype]);
+```c
+// Load an integer literal value into a register.
+// Return the number of the register
+int cgload(int value) {
 
-    // Join that sub-tree with ours. Convert the token
-    // into an AST operation at the same time.
-    left = mkastnode(arithop(tokentype), left, right, 0);
+  // Get a new register
+  int r= alloc_register();
 
-    // Update the details of the current token.
-    // If no tokens left, return just the left node
-    tokentype = Token.token;
-    if (tokentype == T_EOF)
-      return (left);
-  }
-
-  // Return the tree we have when the precedence
-  // is the same or lower
-  return (left);
+  // Print out the code to initialise it
+  fprintf(Outfile, "\tmovq\t$%d, %s\n", value, reglist[r]);
+  return(r);
 }
 ```
 
-Firstly, note that this is still recursive like the previous parser
-functions. This time, we receive the precedence level of the token
-that was found before we got called. `main()` will call us with the
-lowest precedence, 0, but we will call ourselves with higher values.
+### Adding Two Registers
 
-You should also spot that the code is quite similar to the
-`multiplicative_expr()` function: read in an integer literal,
-get the operator's token type, then loop building a tree.
-
-The difference is the loop condition and body:
+`cgadd()` takes two register numbers and generates the code to add
+them together. The result is saved in one of the two registers,
+and the other one is then freed for future use:
 
 ```c
-multiplicative_expr():
-  while ((tokentype == T_STAR) || (tokentype == T_SLASH)) {
-    scan(&Token); right = primary();
-
-    left = mkastnode(arithop(tokentype), left, right, 0);
-
-    tokentype = Token.token;
-    if (tokentype == T_EOF) return (left);
-  }
-
-binexpr():
-  while (op_precedence(tokentype) > ptp) {
-    scan(&Token); right = binexpr(OpPrec[tokentype]);
-
-    left = mkastnode(arithop(tokentype), left, right, 0);
-
-    tokentype = Token.token;
-    if (tokentype == T_EOF) return (left);
-  }
+// Add two registers together and return
+// the number of the register with the result
+int cgadd(int r1, int r2) {
+  fprintf(Outfile, "\taddq\t%s, %s\n", reglist[r1], reglist[r2]);
+  free_register(r1);
+  return(r2);
+}
 ```
 
-With the Pratt parser, when the next operator has a higher precedence
-than our current token, instead of just getting the next integer
-literal with `primary()`, we call ourselves with `binexpr(OpPrec[tokentype])`
-to raise the operator precedence.
+Note that addition is *commutative*, so I could have added `r2` to `r1`
+instead of `r1` to `r2`. The identity of the register with the final
+value is returned.
 
-Once we hit a token at our precedence level or lower, we will simply:
+### Multiplying Two Registers
+
+This is very similar to addition, and again the operation is
+*commutative*, so any register can be returned:
 
 ```c
-  return (left);
+// Multiply two registers together and return
+// the number of the register with the result
+int cgmul(int r1, int r2) {
+  fprintf(Outfile, "\timulq\t%s, %s\n", reglist[r1], reglist[r2]);
+  free_register(r1);
+  return(r2);
+}
 ```
 
-This will either be a sub-tree with lots of nodes and operators at
-a higher precedence that the operator that called us, or it might
-be a single integer literal for an operator at the same predence as us.
+### Subtracting Two Registers
 
-Now we have a single function to do expression parsing. It uses a
-small helper function to enforce the operator precedence, and thus
-implements the semantics of our language.
+Subtraction is *not* commutative: we have to get the order correct.
+The second register is subtracted from the first, so we return the
+first and free the second:
 
-## Putting Both Parsers Into Action
-
-You can make two programs, one with each parser:
-
-```
-$ make parser                                        # Pratt Parser
-cc -o parser -g expr.c interp.c main.c scan.c tree.c
-
-$ make parser2                                       # Precedence Climbing
-cc -o parser2 -g expr2.c interp.c main.c scan.c tree.c
+```c
+// Subtract the second register from the first and
+// return the number of the register with the result
+int cgsub(int r1, int r2) {
+  fprintf(Outfile, "\tsubq\t%s, %s\n", reglist[r2], reglist[r1]);
+  free_register(r2);
+  return(r1);
+}
 ```
 
-You can also test both parsers with the same input files from the
-previous part of our journey:
+### Dividing Two Registers
 
+Division is also not commutative, so the previous notes apply. On
+the x86-64, it's even more complicated. We need to load `%rax`
+with the *dividend* from `r1`. This needs to be extended to eight
+bytes with `cqo`. Then, `idivq` will divide `%rax` with the divisor
+in `r2`, leaving the *quotient* in `%rax`, so we need to copy it
+out to either `r1` or `r2`. Then we can free the other register.
+
+```c
+// Divide the first register by the second and
+// return the number of the register with the result
+int cgdiv(int r1, int r2) {
+  fprintf(Outfile, "\tmovq\t%s,%%rax\n", reglist[r1]);
+  fprintf(Outfile, "\tcqo\n");
+  fprintf(Outfile, "\tidivq\t%s\n", reglist[r2]);
+  fprintf(Outfile, "\tmovq\t%%rax,%s\n", reglist[r1]);
+  free_register(r2);
+  return(r1);
+}
 ```
+
+### Printing A Register
+
+There isn't an x86-64 instruction to print a register out as a decimal
+number. To solve this problem, the assembly preamble contains a function
+called `printint()` that takes a register argument and calls `printf()`
+to print this out in decimal.
+
+I'm not going to give the code in `cgpreamble()`, but it also contains
+the beginning code for `main()`, so that we can assemble our output file
+to get a complete program. The code for `cgpostamble()`, also not given
+here, simply calls `exit(0)` to end the program.
+
+Here, however, is `cgprintint()`:
+
+```c
+void cgprintint(int r) {
+  fprintf(Outfile, "\tmovq\t%s, %%rdi\n", reglist[r]);
+  fprintf(Outfile, "\tcall\tprintint\n");
+  free_register(r);
+}
+```
+
+Linux x86-64 expects the first argument to a function to be in the `%rdi`
+register, so we move our register into `%rdi` before we `call printint`.
+
+## Doing Our First Compile
+
+That's about it for the x86-64 code generator. There is some extra code
+in `main()` to open out `out.s` as our output file. I've also left the
+interpreter in the program so we can confirm that our assembly calculates
+the same answer for the input expression as the interpreter.
+
+Let's make the compiler and run it on `input01`:
+
+```make
+$ make
+cc -o comp1 -g cg.c expr.c gen.c interp.c main.c scan.c tree.c
+
 $ make test
-(./parser input01; \
- ./parser input02; \
- ./parser input03; \
- ./parser input04; \
- ./parser input05)
-15                                       # input01 result
-29                                       # input02 result
-syntax error on line 1, token 5          # input03 result
-Unrecognised character . on line 3       # input04 result
-Unrecognised character a on line 1       # input05 result
+./comp1 input01
+15
+cc -o out out.s
+./out
+15
+```
 
-$ make test2
-(./parser2 input01; \
- ./parser2 input02; \
- ./parser2 input03; \
- ./parser2 input04; \
- ./parser2 input05)
-15                                       # input01 result
-29                                       # input02 result
-syntax error on line 1, token 5          # input03 result
-Unrecognised character . on line 3       # input04 result
-Unrecognised character a on line 1       # input05 result
+Yes! The first 15 is the interpreter's output. The second 15 is the
+assembly's output.
+
+## Examining the Assembly Output
+
+So, exactly what was the assembly output? Well, here is the input file:
 
 ```
+2 + 3 * 5 - 8 / 3
+```
+
+and here is `out.s` for this input with comments:
+
+```
+        .text                           # Preamble code
+.LC0:
+        .string "%d\n"                  # "%d\n" for printf()
+printint:
+        pushq   %rbp
+        movq    %rsp, %rbp              # Set the frame pointer
+        subq    $16, %rsp
+        movl    %edi, -4(%rbp)
+        movl    -4(%rbp), %eax          # Get the printint() argument
+        movl    %eax, %esi
+        leaq    .LC0(%rip), %rdi        # Get the pointer to "%d\n"
+        movl    $0, %eax
+        call    printf@PLT              # Call printf()
+        nop
+        leave                           # and return
+        ret
+
+        .globl  main
+        .type   main, @function
+main:
+        pushq   %rbp
+        movq    %rsp, %rbp              # Set the frame pointer
+                                        # End of preamble code
+
+        movq    $2, %r8                 # %r8 = 2
+        movq    $3, %r9                 # %r9 = 3
+        movq    $5, %r10                # %r10 = 5
+        imulq   %r9, %r10               # %r10 = 3 * 5 = 15
+        addq    %r8, %r10               # %r10 = 2 + 15 = 17
+                                        # %r8 and %r9 are now free again
+        movq    $8, %r8                 # %r8 = 8
+        movq    $3, %r9                 # %r9 = 3
+        movq    %r8,%rax
+        cqo                             # Load dividend %rax with 8
+        idivq   %r9                     # Divide by 3
+        movq    %rax,%r8                # Store quotient in %r8, i.e. 2
+        subq    %r8, %r10               # %r10 = 17 - 2 = 15
+        movq    %r10, %rdi              # Copy 15 into %rdi in preparation
+        call    printint                # to call printint()
+
+        movl    $0, %eax                # Postamble: call exit(0)
+        popq    %rbp
+        ret
+```
+
+Excellent! We now have a legitimate compiler: a program that takes
+an input in one language and generates a translation of that input
+in another language.
+
+We still have to then assemble the output down to machine code and link
+it with the support libraries, but this is something that we can
+perform manually for now. Later on, we will write some code to do
+this automatically.
 
 ## Conclusion and What's Next
 
-It's probably time to step back a bit and see where we've got to. We now have:
+Changing from the interpreter to a generic code generator was trivial, but then
+we had to write some code to generate real assembly output. To do this,
+we had to think about how to allocate registers: for now, we have a naive
+solution. We also had to deal with some x86-64 oddities like the `idivq`
+instruction.
 
- + a scanner that recognises and returns the tokens in our language
- + a parser that recognises our grammar, reports syntax errors and
-   builds an Abstract Syntax Tree
- + a precedence table for the parser that implements the semantics of
-   our language
- + an interpreter that traverses the Abstract Syntax Tree depth-first
-   and calculates the result of the expression in the input
+Something I haven't touched on yet is: why bother with generating the AST for
+an expression? Surely, we could have called `cgadd()` when we hit a '+'
+token in our Pratt parser, ditto for the other operators. I'm going to
+leave you to think about this, but I will come back to it in a step or
+two.
 
-What we don't have yet is a compiler. But we are so close to making our
-first compiler!
-
-In the next part of our compiler writing journey, we will replace the
-interpreter. In its place, we will write a translator that generates
-x86-64 assembly code for each AST node that has a maths operator.
-We will also generate some assembly preamble and postamble to
-support the assembly code that the generator outputs. [Next step](../04_Assembly/Readme.md)
+In the next part of our compiler writing journey, we will add some
+statements to our language, so that it starts to resemble a proper
+computer language. [Next step](../05_Statements/Readme.md)
