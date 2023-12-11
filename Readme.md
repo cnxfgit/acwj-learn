@@ -1,374 +1,324 @@
-# Part 4: An Actual Compiler
+# Part 5: Statements
 
-It's about time that I met my promise of actually writing a compiler.
-So in this part of the journey we are going to replace the interpreter
-in our program with code that generates x86-64 assembly code.
+It's time to add some "proper" statements to the grammar of our language.
+I want to be able to write lines of code like this:
 
-## Revising the Interpreter
+```
+   print 2 + 3 * 5;
+   print 18 - 6/3 + 4*2;
+```
 
-Before we do, it will be worthwhile to revisit the interpreter code
-in `interp.c`:
+Of course, as we are ignoring whitespace, there's no necessity that
+all the tokens for one statement are on the same line. Each statement
+starts with the keyword `print` and is terminated with a semicolon. So
+these are going to become new tokens in our language.
+
+## BNF Description of the Grammar
+
+We've already seen the BNF notation  for expressions. Now let's define
+the BNF syntax for the above types of statements:
+
+```
+statements: statement
+     | statement statements
+     ;
+
+statement: 'print' expression ';'
+     ;
+```
+
+An input file consists of several statements. They are either one statement,
+or a statement followed by more statements. Each statement starts with the
+keyword `print`, then one expression, then a semicolon.
+
+## Changes to the Lexical Scanner
+
+Before we can get to the code that parses the above syntax, we need to
+add a few more bits and pieces to the existing code. Let's start with
+the lexical scanner.
+
+Adding a token for semicolons will be easy. Now, the `print` keyword.
+Later on, we'll have many keywords in the language, plus identifiers
+for our variables, so we'll need to add some code which helps us to
+deal with them.
+
+In `scan.c`, I've added this code which I've borrowed from the SubC
+compiler. It reads in alphanumeric characters into a 
+buffer until it hits a non-alphanumeric character.
 
 ```c
-int interpretAST(struct ASTnode *n) {
-  int leftval, rightval;
+// Scan an identifier from the input file and
+// store it in buf[]. Return the identifier's length
+static int scanident(int c, char *buf, int lim) {
+  int i = 0;
 
-  if (n->left) leftval = interpretAST(n->left);
-  if (n->right) rightval = interpretAST(n->right);
-
-  switch (n->op) {
-    case A_ADD:      return (leftval + rightval);
-    case A_SUBTRACT: return (leftval - rightval);
-    case A_MULTIPLY: return (leftval * rightval);
-    case A_DIVIDE:   return (leftval / rightval);
-    case A_INTLIT:   return (n->intvalue);
-
-    default:
-      fprintf(stderr, "Unknown AST operator %d\n", n->op);
+  // Allow digits, alpha and underscores
+  while (isalpha(c) || isdigit(c) || '_' == c) {
+    // Error if we hit the identifier length limit,
+    // else append to buf[] and get next character
+    if (lim - 1 == i) {
+      printf("identifier too long on line %d\n", Line);
       exit(1);
+    } else if (i < lim - 1) {
+      buf[i++] = c;
+    }
+    c = next();
   }
+  // We hit a non-valid character, put it back.
+  // NUL-terminate the buf[] and return the length
+  putback(c);
+  buf[i] = '\0';
+  return (i);
 }
 ```
 
-The `interpretAST()` function walks the given AST tree depth-first.
-It evaluates any left sub-tree, then the right sub-tree. Finally, it
-uses the `op` value at the base of the current tree to operate on
-these children.
-
-If the `op` value is one of the four maths operators, then this maths
-operation is performed. If the `op` value indicates that the node
-is simply an integer literal, the literal value is return.
-
-The function returns the final value for this tree. And, as it is
-recursive, it will calculate the final value for a whole tree
-one sub-sub-tree at a time.
-
-## Changing to Assembly Code Generation
-
-We are going to write an assembly code generator which is generic.
-This is, in turn, going to call out to a set of CPU-specific code
-generation functions.
-
-Here is the generic assembly code generator in `gen.c`:
+We also need a function to recognise keywords in the language. One way
+would be to have a list of keywords, and to walk the list and `strcmp()`
+each one against the buffer from `scanident()`. The code from SubC has
+an optimisation: match against the first letter before doing the `strcmp()`.
+This speeds up the comparison against dozens of keywords. Right now we
+don't need this optimisation but I've put it in for later:
 
 ```c
-// Given an AST, generate
-// assembly code recursively
-static int genAST(struct ASTnode *n) {
-  int leftreg, rightreg;
-
-  // Get the left and right sub-tree values
-  if (n->left) leftreg = genAST(n->left);
-  if (n->right) rightreg = genAST(n->right);
-
-  switch (n->op) {
-    case A_ADD:      return (cgadd(leftreg,rightreg));
-    case A_SUBTRACT: return (cgsub(leftreg,rightreg));
-    case A_MULTIPLY: return (cgmul(leftreg,rightreg));
-    case A_DIVIDE:   return (cgdiv(leftreg,rightreg));
-    case A_INTLIT:   return (cgload(n->intvalue));
-
-    default:
-      fprintf(stderr, "Unknown AST operator %d\n", n->op);
-      exit(1);
+// Given a word from the input, return the matching
+// keyword token number or 0 if it's not a keyword.
+// Switch on the first letter so that we don't have
+// to waste time strcmp()ing against all the keywords.
+static int keyword(char *s) {
+  switch (*s) {
+    case 'p':
+      if (!strcmp(s, "print"))
+        return (T_PRINT);
+      break;
   }
+  return (0);
 }
 ```
 
-Looks familar, huh?! We are doing the same depth-first tree traversal.
-This time:
-
-  + A_INTLIT: load a register with the literal value
-  + Other operators: perform a maths function on the two registers
-    that hold the left-child's and right-child's value
-
-Instead of passing values, the code in `genAST()` passes around
-register identifiers. For example `cgload()` loads a value into a register and
-returns the identity of the register with the loaded value.
-
-`genAST()` itself returns the identity of the register that holds the final
-value of the tree at this point. That's why the code at the top is
-getting register identities:
+Now, at the bottom of the switch statement in `scan()`, we add this code
+to recognise semicolons and keywords:
 
 ```c
-  if (n->left) leftreg = genAST(n->left);
-  if (n->right) rightreg = genAST(n->right);
+    case ';':
+      t->token = T_SEMI;
+      break;
+    default:
+
+      // If it's a digit, scan the
+      // literal integer value in
+      if (isdigit(c)) {
+        t->intvalue = scanint(c);
+        t->token = T_INTLIT;
+        break;
+      } else if (isalpha(c) || '_' == c) {
+        // Read in a keyword or identifier
+        scanident(c, Text, TEXTLEN);
+
+        // If it's a recognised keyword, return that token
+        if (tokentype = keyword(Text)) {
+          t->token = tokentype;
+          break;
+        }
+        // Not a recognised keyword, so an error for now
+        printf("Unrecognised symbol %s on line %d\n", Text, Line);
+        exit(1);
+      }
+      // The character isn't part of any recognised token, error
+      printf("Unrecognised character %c on line %d\n", c, Line);
+      exit(1);
 ```
 
-## Calling `genAST()`
-
-`genAST()` is only going to calculate the value of the expression given to
-it. We need to print out this final calculation. We're also going to need
-to wrap the assembly code we generate with some leading code (the
-*preamble*) and some trailing code (the *postamble*). This is done with
-the other function in `gen.c`:
+I've also added a global `Text` buffer to store the keywords and
+identifiers:
 
 ```c
-void generatecode(struct ASTnode *n) {
+#define TEXTLEN         512             // Length of symbols in input
+extern_ char Text[TEXTLEN + 1];         // Last identifier scanned
+```
+
+## Changes to the Expression Parser
+
+Up to now our input files have contained just a single expression; therefore,
+in our Pratt parser code in `binexpr()` (in `expr.c`), we had this code to
+exit the parser:
+
+```c
+  // If no tokens left, return just the left node
+  tokentype = Token.token;
+  if (tokentype == T_EOF)
+    return (left);
+```
+
+With our new grammar, each expression is terminated by a semicolon. Thus,
+we need to change the code in the expression parser to spot the `T_SEMI`
+tokens and exit the expression parsing:
+
+```c
+// Return an AST tree whose root is a binary operator.
+// Parameter ptp is the previous token's precedence.
+struct ASTnode *binexpr(int ptp) {
+  struct ASTnode *left, *right;
+  int tokentype;
+
+  // Get the integer literal on the left.
+  // Fetch the next token at the same time.
+  left = primary();
+
+  // If we hit a semicolon, return just the left node
+  tokentype = Token.token;
+  if (tokentype == T_SEMI)
+    return (left);
+
+    while (op_precedence(tokentype) > ptp) {
+      ...
+
+          // Update the details of the current token.
+    // If we hit a semicolon, return just the left node
+    tokentype = Token.token;
+    if (tokentype == T_SEMI)
+      return (left);
+    }
+}
+```
+
+## Changes to the Code Generator
+
+I want to keep the generic code generator in `gen.c`
+separate from the CPU-specific code in `cg.c`. That also means
+that the rest of the compiler should only ever call the functions in
+`gen.c`, and only `gen.c` should call the code in `cg.c`.
+
+To this end, I've defined some new "front-end" functions in `gen.c`:
+
+```c
+void genpreamble()        { cgpreamble(); }
+void genpostamble()       { cgpostamble(); }
+void genfreeregs()        { freeall_registers(); }
+void genprintint(int reg) { cgprintint(reg); }
+```
+
+## Adding the Parser for Statements
+
+We have a new file `stmt.c`. This will hold the parsing code for all
+the main statements in our language. Right now, we need to parse the
+BNF grammar for statements which I gave up above. This is done with
+this single function. I've converted the recursive definition into
+a loop:
+
+```c
+// Parse one or more statements
+void statements(void) {
+  struct ASTnode *tree;
   int reg;
 
-  cgpreamble();
-  reg= genAST(n);
-  cgprintint(reg);      // Print the register with the result as an int
-  cgpostamble();
+  while (1) {
+    // Match a 'print' as the first token
+    match(T_PRINT, "print");
+
+    // Parse the following expression and
+    // generate the assembly code
+    tree = binexpr(0);
+    reg = genAST(tree);
+    genprintint(reg);
+    genfreeregs();
+
+    // Match the following semicolon
+    // and stop if we are at EOF
+    semi();
+    if (Token.token == T_EOF)
+      return;
+  }
 }
 ```
 
-## The x86-64 Code Generator
+In each loop, the code finds a T_PRINT token. It then calls `binexpr()` to
+parse the expression. Finally, it finds the T_SEMI token. If a T_EOF token
+follows, we break out of the loop.
 
-That's the generic code generator out of the road. Now we need to look
-at the generation of some real assembly code. For now, I'm targetting
-the x86-64 CPU as this is still one of the most common Linux platforms.
-So, open up `cg.c` and let's get browsing.
+After each expression tree, the code in `gen.c` is called to convert
+the tree into assembly code and to call the assembly `printint()` function
+to print out the final value.
 
-### Allocating Registers
+## Some Helper Functions
 
-Any CPU has a limited number of registers. We will have to allocate
-a register to hold the integer literal values, plus any calculation
-that we perform on them. However, once we've used a value, we can
-often discard the value and hence free up the register holding it.
-Then we can re-use that register for another value.
-
-There are three functions that deal with register allocation:
-
- + `freeall_registers()`: Set all registers as available
- + `alloc_register()`: Allocate a free register
- + `free_register()`: Free an allocated register
-
-I'm not going to go through the code as it's straight forward but with
-some error checking. Right now, if I run out of registers then the
-program will crash. Later on, I'll deal with the situation when we have
-run out of free registers.
-
-The code works on generic registers: r0, r1, r2 and r3. There is a table
-of strings with the actual register names:
+There are a couple of new helper functions in the above code, which I've put
+into a new file, `misc.c`:
 
 ```c
-static char *reglist[4]= { "%r8", "%r9", "%r10", "%r11" };
-```
+// Ensure that the current token is t,
+// and fetch the next token. Otherwise
+// throw an error 
+void match(int t, char *what) {
+  if (Token.token == t) {
+    scan(&Token);
+  } else {
+    printf("%s expected on line %d\n", what, Line);
+    exit(1);
+  }
+}
 
-This makes these functions fairly independent of the CPU architecture.
-
-### Loading a Register
-
-This is done in `cgload()`: a register is allocated, then a `movq`
-instruction loads a literal value into the allocated register.
-
-```c
-// Load an integer literal value into a register.
-// Return the number of the register
-int cgload(int value) {
-
-  // Get a new register
-  int r= alloc_register();
-
-  // Print out the code to initialise it
-  fprintf(Outfile, "\tmovq\t$%d, %s\n", value, reglist[r]);
-  return(r);
+// Match a semicon and fetch the next token
+void semi(void) {
+  match(T_SEMI, ";");
 }
 ```
 
-### Adding Two Registers
+These form part of the syntax checking in the parser. Later on, I'll add
+more short functions to call `match()` to make our syntax checking easier.
 
-`cgadd()` takes two register numbers and generates the code to add
-them together. The result is saved in one of the two registers,
-and the other one is then freed for future use:
+## Changes to `main()`
 
-```c
-// Add two registers together and return
-// the number of the register with the result
-int cgadd(int r1, int r2) {
-  fprintf(Outfile, "\taddq\t%s, %s\n", reglist[r1], reglist[r2]);
-  free_register(r1);
-  return(r2);
-}
-```
-
-Note that addition is *commutative*, so I could have added `r2` to `r1`
-instead of `r1` to `r2`. The identity of the register with the final
-value is returned.
-
-### Multiplying Two Registers
-
-This is very similar to addition, and again the operation is
-*commutative*, so any register can be returned:
+`main()` used to call `binexpr()` directly to parse the single expression
+in the old input files. Now it does this:
 
 ```c
-// Multiply two registers together and return
-// the number of the register with the result
-int cgmul(int r1, int r2) {
-  fprintf(Outfile, "\timulq\t%s, %s\n", reglist[r1], reglist[r2]);
-  free_register(r1);
-  return(r2);
-}
+  scan(&Token);                 // Get the first token from the input
+  genpreamble();                // Output the preamble
+  statements();                 // Parse the statements in the input
+  genpostamble();               // Output the postamble
+  fclose(Outfile);              // Close the output file and exit
+  exit(0);
 ```
 
-### Subtracting Two Registers
+## Trying It Out
 
-Subtraction is *not* commutative: we have to get the order correct.
-The second register is subtracted from the first, so we return the
-first and free the second:
+That's about it for the new and changed code. Let's give the new code
+a whirl. Here is the new input file, `input01`:
 
-```c
-// Subtract the second register from the first and
-// return the number of the register with the result
-int cgsub(int r1, int r2) {
-  fprintf(Outfile, "\tsubq\t%s, %s\n", reglist[r2], reglist[r1]);
-  free_register(r2);
-  return(r1);
-}
+```
+print 12 * 3;
+print 
+   18 - 2
+      * 4; print
+1 + 2 +
+  9 - 5/2 + 3*5;
 ```
 
-### Dividing Two Registers
-
-Division is also not commutative, so the previous notes apply. On
-the x86-64, it's even more complicated. We need to load `%rax`
-with the *dividend* from `r1`. This needs to be extended to eight
-bytes with `cqo`. Then, `idivq` will divide `%rax` with the divisor
-in `r2`, leaving the *quotient* in `%rax`, so we need to copy it
-out to either `r1` or `r2`. Then we can free the other register.
-
-```c
-// Divide the first register by the second and
-// return the number of the register with the result
-int cgdiv(int r1, int r2) {
-  fprintf(Outfile, "\tmovq\t%s,%%rax\n", reglist[r1]);
-  fprintf(Outfile, "\tcqo\n");
-  fprintf(Outfile, "\tidivq\t%s\n", reglist[r2]);
-  fprintf(Outfile, "\tmovq\t%%rax,%s\n", reglist[r1]);
-  free_register(r2);
-  return(r1);
-}
-```
-
-### Printing A Register
-
-There isn't an x86-64 instruction to print a register out as a decimal
-number. To solve this problem, the assembly preamble contains a function
-called `printint()` that takes a register argument and calls `printf()`
-to print this out in decimal.
-
-I'm not going to give the code in `cgpreamble()`, but it also contains
-the beginning code for `main()`, so that we can assemble our output file
-to get a complete program. The code for `cgpostamble()`, also not given
-here, simply calls `exit(0)` to end the program.
-
-Here, however, is `cgprintint()`:
-
-```c
-void cgprintint(int r) {
-  fprintf(Outfile, "\tmovq\t%s, %%rdi\n", reglist[r]);
-  fprintf(Outfile, "\tcall\tprintint\n");
-  free_register(r);
-}
-```
-
-Linux x86-64 expects the first argument to a function to be in the `%rdi`
-register, so we move our register into `%rdi` before we `call printint`.
-
-## Doing Our First Compile
-
-That's about it for the x86-64 code generator. There is some extra code
-in `main()` to open out `out.s` as our output file. I've also left the
-interpreter in the program so we can confirm that our assembly calculates
-the same answer for the input expression as the interpreter.
-
-Let's make the compiler and run it on `input01`:
+Yes I've decided to check that we have have tokens spread out across multiple
+lines. To compile and run the input file, do a `make test`:
 
 ```make
-$ make
-cc -o comp1 -g cg.c expr.c gen.c interp.c main.c scan.c tree.c
-
 $ make test
+cc -o comp1 -g cg.c expr.c gen.c main.c misc.c scan.c stmt.c tree.c
 ./comp1 input01
-15
 cc -o out out.s
 ./out
-15
+36
+10
+25
 ```
 
-Yes! The first 15 is the interpreter's output. The second 15 is the
-assembly's output.
-
-## Examining the Assembly Output
-
-So, exactly what was the assembly output? Well, here is the input file:
-
-```
-2 + 3 * 5 - 8 / 3
-```
-
-and here is `out.s` for this input with comments:
-
-```
-        .text                           # Preamble code
-.LC0:
-        .string "%d\n"                  # "%d\n" for printf()
-printint:
-        pushq   %rbp
-        movq    %rsp, %rbp              # Set the frame pointer
-        subq    $16, %rsp
-        movl    %edi, -4(%rbp)
-        movl    -4(%rbp), %eax          # Get the printint() argument
-        movl    %eax, %esi
-        leaq    .LC0(%rip), %rdi        # Get the pointer to "%d\n"
-        movl    $0, %eax
-        call    printf@PLT              # Call printf()
-        nop
-        leave                           # and return
-        ret
-
-        .globl  main
-        .type   main, @function
-main:
-        pushq   %rbp
-        movq    %rsp, %rbp              # Set the frame pointer
-                                        # End of preamble code
-
-        movq    $2, %r8                 # %r8 = 2
-        movq    $3, %r9                 # %r9 = 3
-        movq    $5, %r10                # %r10 = 5
-        imulq   %r9, %r10               # %r10 = 3 * 5 = 15
-        addq    %r8, %r10               # %r10 = 2 + 15 = 17
-                                        # %r8 and %r9 are now free again
-        movq    $8, %r8                 # %r8 = 8
-        movq    $3, %r9                 # %r9 = 3
-        movq    %r8,%rax
-        cqo                             # Load dividend %rax with 8
-        idivq   %r9                     # Divide by 3
-        movq    %rax,%r8                # Store quotient in %r8, i.e. 2
-        subq    %r8, %r10               # %r10 = 17 - 2 = 15
-        movq    %r10, %rdi              # Copy 15 into %rdi in preparation
-        call    printint                # to call printint()
-
-        movl    $0, %eax                # Postamble: call exit(0)
-        popq    %rbp
-        ret
-```
-
-Excellent! We now have a legitimate compiler: a program that takes
-an input in one language and generates a translation of that input
-in another language.
-
-We still have to then assemble the output down to machine code and link
-it with the support libraries, but this is something that we can
-perform manually for now. Later on, we will write some code to do
-this automatically.
+And it works!
 
 ## Conclusion and What's Next
 
-Changing from the interpreter to a generic code generator was trivial, but then
-we had to write some code to generate real assembly output. To do this,
-we had to think about how to allocate registers: for now, we have a naive
-solution. We also had to deal with some x86-64 oddities like the `idivq`
-instruction.
+We've added our first "real" statement grammar to our language. I've defined
+it in BNF notation, but it was easier to implement it with a loop and not
+recursively. Don't worry, we'll go back to doing recursive parsing soon.
 
-Something I haven't touched on yet is: why bother with generating the AST for
-an expression? Surely, we could have called `cgadd()` when we hit a '+'
-token in our Pratt parser, ditto for the other operators. I'm going to
-leave you to think about this, but I will come back to it in a step or
-two.
+Along the way we had to modify the scanner, add support for keywords and
+identifiers, and to more cleanly separate the generic code generator and
+the CPU-specific generator.
 
-In the next part of our compiler writing journey, we will add some
-statements to our language, so that it starts to resemble a proper
-computer language. [Next step](../05_Statements/Readme.md)
+In the next part of our compiler writing journey, we will add variables
+to the language. This will require a significant amount of work. [Next step](../06_Variables/Readme.md)

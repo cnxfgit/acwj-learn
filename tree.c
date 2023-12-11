@@ -16,6 +16,7 @@ struct ASTnode *mkastnode(int op, struct ASTnode *left,
     fprintf(stderr, "Unable to malloc in mkastnode()\n");
     exit(1);
   }
+
   // Copy in the field values and return it
   n->op = op;
   n->left = left;

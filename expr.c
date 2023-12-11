@@ -14,31 +14,32 @@ static struct ASTnode *primary(void) {
   // and scan in the next token. Otherwise, a syntax error
   // for any other token type.
   switch (Token.token) {
-  case T_INTLIT:
-    n = mkastleaf(A_INTLIT, Token.intvalue);
-    scan(&Token);
-    return (n);
-  default:
-    fprintf(stderr, "syntax error on line %d, token %d\n", Line, Token.token);
-    exit(1);
+    case T_INTLIT:
+      n = mkastleaf(A_INTLIT, Token.intvalue);
+      scan(&Token);
+      return (n);
+    default:
+      fprintf(stderr, "syntax error on line %d, token %d\n", Line,
+	      Token.token);
+      exit(1);
   }
 }
 
 
 // Convert a binary operator token into an AST operation.
-int arithop(int tokentype) {
+static int arithop(int tokentype) {
   switch (tokentype) {
-  case T_PLUS:
-    return (A_ADD);
-  case T_MINUS:
-    return (A_SUBTRACT);
-  case T_STAR:
-    return (A_MULTIPLY);
-  case T_SLASH:
-    return (A_DIVIDE);
-  default:
-    fprintf(stderr, "syntax error on line %d, token %d\n", Line, tokentype);
-    exit(1);
+    case T_PLUS:
+      return (A_ADD);
+    case T_MINUS:
+      return (A_SUBTRACT);
+    case T_STAR:
+      return (A_MULTIPLY);
+    case T_SLASH:
+      return (A_DIVIDE);
+    default:
+      fprintf(stderr, "syntax error on line %d, token %d\n", Line, tokentype);
+      exit(1);
   }
 }
 
@@ -66,9 +67,9 @@ struct ASTnode *binexpr(int ptp) {
   // Fetch the next token at the same time.
   left = primary();
 
-  // If no tokens left, return just the left node
+  // If we hit a semicolon, return just the left node
   tokentype = Token.token;
-  if (tokentype == T_EOF)
+  if (tokentype == T_SEMI)
     return (left);
 
   // While the precedence of this token is
@@ -86,9 +87,9 @@ struct ASTnode *binexpr(int ptp) {
     left = mkastnode(arithop(tokentype), left, right, 0);
 
     // Update the details of the current token.
-    // If no tokens left, return just the left node
+    // If we hit a semicolon, return just the left node
     tokentype = Token.token;
-    if (tokentype == T_EOF)
+    if (tokentype == T_SEMI)
       return (left);
   }
 
