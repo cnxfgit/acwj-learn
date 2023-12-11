@@ -10,13 +10,13 @@ compn: $(SRCN)
 clean:
 	rm -f comp1 compn *.o *.s out
 
-test: comp1 input04
-	./comp1 input04
+test: comp1 input05
+	./comp1 input05
 	cc -o out out.s
 	./out
 
-testn: compn input04
-	./compn input04
+testn: compn input05
+	./compn input05
 	nasm -f elf64 out.s
 	cc -no-pie -o out out.o
 	./out
