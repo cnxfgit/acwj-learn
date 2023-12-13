@@ -13,9 +13,13 @@ enum {
 
 // Commands and default filenames
 #define AOUT "a.out"
+#ifdef __NASM__
+#define ASCMD "nasm -g -f elf64 -w-ptr -o "
+#define LDCMD "cc -g -no-pie -fno-plt -Wall -o "
+#else
 #define ASCMD "as -g -o "
-#define QBECMD "qbe -o "
-#define LDCMD "cc -g -no-pie -o "
+#define LDCMD "cc -g -o "
+#endif
 #define CPPCMD "cpp -nostdinc -isystem "
 
 // Token types
@@ -23,32 +27,32 @@ enum {
   T_EOF,
 
   // Binary operators
-  T_ASSIGN, T_ASPLUS, T_ASMINUS,		// 1
-  T_ASSTAR, T_ASSLASH, T_ASMOD,			// 4
-  T_QUESTION, T_LOGOR, T_LOGAND,		// 7
-  T_OR, T_XOR, T_AMPER,				// 10
-  T_EQ, T_NE,					// 13
-  T_LT, T_GT, T_LE, T_GE,			// 15
-  T_LSHIFT, T_RSHIFT,				// 19
-  T_PLUS, T_MINUS, T_STAR, T_SLASH, T_MOD,	// 21
+  T_ASSIGN, T_ASPLUS, T_ASMINUS,
+  T_ASSTAR, T_ASSLASH, T_ASMOD,
+  T_QUESTION, T_LOGOR, T_LOGAND,
+  T_OR, T_XOR, T_AMPER,
+  T_EQ, T_NE,
+  T_LT, T_GT, T_LE, T_GE,
+  T_LSHIFT, T_RSHIFT,
+  T_PLUS, T_MINUS, T_STAR, T_SLASH, T_MOD,
 
   // Other operators
-  T_INC, T_DEC, T_INVERT, T_LOGNOT,		// 26
+  T_INC, T_DEC, T_INVERT, T_LOGNOT,
 
   // Type keywords
-  T_VOID, T_CHAR, T_INT, T_LONG,		// 30
+  T_VOID, T_CHAR, T_INT, T_LONG,
 
   // Other keywords
-  T_IF, T_ELSE, T_WHILE, T_FOR, T_RETURN,	// 34
-  T_STRUCT, T_UNION, T_ENUM, T_TYPEDEF,		// 39
-  T_EXTERN, T_BREAK, T_CONTINUE, T_SWITCH,	// 43
-  T_CASE, T_DEFAULT, T_SIZEOF, T_STATIC,	// 47
+  T_IF, T_ELSE, T_WHILE, T_FOR, T_RETURN,
+  T_STRUCT, T_UNION, T_ENUM, T_TYPEDEF,
+  T_EXTERN, T_BREAK, T_CONTINUE, T_SWITCH,
+  T_CASE, T_DEFAULT, T_SIZEOF, T_STATIC,
 
   // Structural tokens
-  T_INTLIT, T_STRLIT, T_SEMI, T_IDENT,		// 51
-  T_LBRACE, T_RBRACE, T_LPAREN, T_RPAREN,	// 55
-  T_LBRACKET, T_RBRACKET, T_COMMA, T_DOT,	// 59
-  T_ARROW, T_COLON				// 63
+  T_INTLIT, T_STRLIT, T_SEMI, T_IDENT,
+  T_LBRACE, T_RBRACE, T_LPAREN, T_RPAREN,
+  T_LBRACKET, T_RBRACKET, T_COMMA, T_DOT,
+  T_ARROW, T_COLON
 };
 
 // Token structure
@@ -112,12 +116,14 @@ struct symtable {
   int size;			// Total size in bytes of this symbol
   int nelems;			// Functions: # params. Arrays: # elements
 #define st_endlabel st_posn	// For functions, the end label
-#define st_hasaddr  st_posn	// For locals, 1 if any A_ADDR operation
-  int st_posn;			// For struct members, the offset of
-    				// the member from the base of the struct
+  int st_posn;			// For locals, the negative offset
+    				// from the stack base pointer
   int *initlist;		// List of initial values
   struct symtable *next;	// Next symbol in one list
   struct symtable *member;	// First member of a function, struct,
+#ifdef __NASM__
+  int extinit;
+#endif
 };				// union or enum
 
 // Abstract Syntax Tree structure
@@ -138,7 +144,7 @@ struct ASTnode {
 
 enum {
   NOREG = -1,			// Use NOREG when the AST generation
-  				// functions have no temporary to return
+  				// functions have no register to return
   NOLABEL = 0			// Use NOLABEL when we have no label to
     				// pass to genAST()
 };

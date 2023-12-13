@@ -42,12 +42,13 @@ char *alter_suffix(char *str, char suffix) {
 static char *do_compile(char *filename) {
   char cmd[TEXTLEN];
 
-  // Change the input file's suffix to .q
-  Outfilename = alter_suffix(filename, 'q');
+  // Change the input file's suffix to .s
+  Outfilename = alter_suffix(filename, 's');
   if (Outfilename == NULL) {
     fprintf(stderr, "Error: %s has no suffix, try .c on the end\n", filename);
     exit(1);
   }
+
   // Generate the pre-processor command
   snprintf(cmd, TEXTLEN, "%s %s %s", CPPCMD, INCDIR, filename);
 
@@ -89,30 +90,6 @@ static char *do_compile(char *filename) {
   return (Outfilename);
 }
 
-// Given an input filename, run QBE on the file and
-// produce an assembly file. Return the object filename
-char *do_qbe(char *filename) {
-  char cmd[TEXTLEN];
-  int err;
-
-  char *outfilename = alter_suffix(filename, 's');
-  if (outfilename == NULL) {
-    fprintf(stderr, "Error: %s has no suffix, try .qbe on the end\n",
-	    filename);
-    exit(1);
-  }
-  // Build the QBE command and run it
-  snprintf(cmd, TEXTLEN, "%s %s %s", QBECMD, outfilename, filename);
-  if (O_verbose)
-    printf("%s\n", cmd);
-  err = system(cmd);
-  if (err != 0) {
-    fprintf(stderr, "QBE translation of %s failed\n", filename);
-    exit(1);
-  }
-  return (outfilename);
-}
-
 // Given an input filename, assemble that file
 // down to object code. Return the object filename
 char *do_assemble(char *filename) {
@@ -124,8 +101,19 @@ char *do_assemble(char *filename) {
     fprintf(stderr, "Error: %s has no suffix, try .s on the end\n", filename);
     exit(1);
   }
+
   // Build the assembly command and run it
+#ifdef __NASM__
+  char *incfilename = alter_suffix(filename, 'n');
+  if (incfilename == NULL) {
+    fprintf(stderr, "Error: %s has no suffix, try .s on the end\n", filename);
+    exit(1);
+  }
+//  sprintf(cmd, "%s %s -p%s %s", ASCMD, outfilename, incfilename, filename);
+  sprintf(cmd, "%s %s %s", ASCMD, outfilename, filename);
+#else
   snprintf(cmd, TEXTLEN, "%s %s %s", ASCMD, outfilename, filename);
+#endif
   if (O_verbose)
     printf("%s\n", cmd);
   err = system(cmd);
@@ -185,7 +173,7 @@ static void usage(char *prog) {
 enum { MAXOBJ = 100 };
 int main(int argc, char **argv) {
   char *outfilename = AOUT;
-  char *qbefile, *asmfile, *objfile;
+  char *asmfile, *objfile;
   char *objlist[MAXOBJ];
   int i, j, objcnt = 0;
 
@@ -240,8 +228,7 @@ int main(int argc, char **argv) {
 
   // Work on each input file in turn
   while (i < argc) {
-    qbefile = do_compile(argv[i]);	// Compile the source file
-    asmfile = do_qbe(qbefile);
+    asmfile = do_compile(argv[i]);	// Compile the source file
 
     if (O_dolink || O_assemble) {
       objfile = do_assemble(asmfile);	// Assemble it to object forma
@@ -253,10 +240,8 @@ int main(int argc, char **argv) {
       objlist[objcnt] = NULL;	// to the list of object files
     }
 
-    if (!O_keepasm) {		// Remove the QBE and assembly files
-      unlink(qbefile);		// if we don't need to keep them
-      unlink(asmfile);
-    }
+    if (!O_keepasm)		// Remove the assembly file if
+      unlink(asmfile);		// we don't need to keep it
     i++;
   }
 

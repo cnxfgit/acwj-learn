@@ -3,8 +3,8 @@
 # against known good output
 
 # Build our compiler if needed
-if [ ! -f ../cwj ]
-then (cd ..; make install)
+if [ ! -f ../cwj0 ]
+then (cd ..; make install; make cwj0)
 fi
 
 # Try to use each input source file
@@ -21,7 +21,7 @@ do if [ ! -f "out.$i" -a ! -f "err.$i" ]
 	  # Print the test name, compile it
 	  # with our compiler
           echo -n $i
-          ../cwj -o out $i
+          ../cwj0 -o out $i
           ./out > trial.$i
 
   	  # Compare this agains the correct output
@@ -45,7 +45,7 @@ do if [ ! -f "out.$i" -a ! -f "err.$i" ]
    else if [ -f "err.$i" ]
         then
           echo -n $i
-          ../cwj $i 2> "trial.$i"
+          ../cwj0 $i 2> "trial.$i"
           cmp -s "err.$i" "trial.$i"
           if [ "$?" -eq "1" ]
           then echo ": failed"

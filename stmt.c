@@ -57,6 +57,7 @@ static struct ASTnode *if_statement(void) {
     scan(&Token);
     falseAST = single_statement();
   }
+
   // Build and return the AST for this statement
   return (mkastnode(A_IF, P_NONE, NULL, condAST, trueAST, falseAST, NULL, 0));
 }
@@ -143,7 +144,7 @@ static struct ASTnode *for_statement(void) {
 //
 // Parse a return statement and return its AST
 static struct ASTnode *return_statement(void) {
-  struct ASTnode *tree = NULL;
+  struct ASTnode *tree= NULL;
 
   // Ensure we have 'return'
   match(T_RETURN, "return");
@@ -168,6 +169,7 @@ static struct ASTnode *return_statement(void) {
     // Get the ')'
     rparen();
   }
+
   // Add on the A_RETURN node
   tree = mkastunary(A_RETURN, P_NONE, NULL, tree, NULL, 0);
 
@@ -203,10 +205,10 @@ static struct ASTnode *continue_statement(void) {
 // Parse a switch statement and return its AST
 static struct ASTnode *switch_statement(void) {
   struct ASTnode *left, *body, *n, *c;
-  struct ASTnode *casetree = NULL, *casetail = NULL;
+  struct ASTnode *casetree = NULL, *casetail;
   int inloop = 1, casecount = 0;
   int seendefault = 0;
-  int ASTop, casevalue = 0;
+  int ASTop, casevalue;
 
   // Skip the 'switch' and '('
   scan(&Token);
@@ -304,7 +306,7 @@ static struct ASTnode *switch_statement(void) {
 static struct ASTnode *single_statement(void) {
   struct ASTnode *stmt;
   struct symtable *ctype;
-  int linenum = Line;
+  int linenum= Line;
 
   switch (Token.token) {
     case T_SEMI:
@@ -315,7 +317,7 @@ static struct ASTnode *single_statement(void) {
       // We have a '{', so this is a compound statement
       lbrace();
       stmt = compound_statement(0);
-      stmt->linenum = linenum;
+      stmt->linenum= linenum;
       rbrace();
       return (stmt);
     case T_IDENT:
@@ -324,7 +326,7 @@ static struct ASTnode *single_statement(void) {
       // Otherwise, fall down to the parse_type() call.
       if (findtypedef(Text) == NULL) {
 	stmt = binexpr(0);
-	stmt->linenum = linenum;
+        stmt->linenum= linenum;
 	semi();
 	return (stmt);
       }
@@ -340,38 +342,24 @@ static struct ASTnode *single_statement(void) {
       semi();
       return (stmt);		// Any assignments from the declarations
     case T_IF:
-      stmt = if_statement();
-      stmt->linenum = linenum;
-      return (stmt);
+      stmt= if_statement(); stmt->linenum= linenum; return(stmt);
     case T_WHILE:
-      stmt = while_statement();
-      stmt->linenum = linenum;
-      return (stmt);
+      stmt= while_statement(); stmt->linenum= linenum; return(stmt);
     case T_FOR:
-      stmt = for_statement();
-      stmt->linenum = linenum;
-      return (stmt);
+      stmt= for_statement(); stmt->linenum= linenum; return(stmt);
     case T_RETURN:
-      stmt = return_statement();
-      stmt->linenum = linenum;
-      return (stmt);
+      stmt= return_statement(); stmt->linenum= linenum; return(stmt);
     case T_BREAK:
-      stmt = break_statement();
-      stmt->linenum = linenum;
-      return (stmt);
+      stmt= break_statement(); stmt->linenum= linenum; return(stmt);
     case T_CONTINUE:
-      stmt = continue_statement();
-      stmt->linenum = linenum;
-      return (stmt);
+      stmt= continue_statement(); stmt->linenum= linenum; return(stmt);
     case T_SWITCH:
-      stmt = switch_statement();
-      stmt->linenum = linenum;
-      return (stmt);
+      stmt= switch_statement(); stmt->linenum= linenum; return(stmt);
     default:
       // For now, see if this is an expression.
       // This catches assignment statements.
       stmt = binexpr(0);
-      stmt->linenum = linenum;
+      stmt->linenum= linenum;
       semi();
       return (stmt);
   }

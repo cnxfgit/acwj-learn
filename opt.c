@@ -89,6 +89,7 @@ static struct ASTnode *fold(struct ASTnode *n) {
       // If only the left is A_INTLIT, do a fold1()
       n = fold1(n);
   }
+
   // Return the possibly modified tree
   return (n);
 }

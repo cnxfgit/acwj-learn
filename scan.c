@@ -25,34 +25,34 @@ static int next(void) {
     return (c);
   }
 
-  c = fgetc(Infile);		// Read from input file
+  c = fgetc(Infile);			// Read from input file
 
   while (Linestart && c == '#') {	// We've hit a pre-processor statement
-    Linestart = 0;		// No longer at the start of the line
-    scan(&Token);		// Get the line number into l
+    Linestart = 0;			// No longer at the start of the line
+    scan(&Token);			// Get the line number into l
     if (Token.token != T_INTLIT)
       fatals("Expecting pre-processor line number, got:", Text);
     l = Token.intvalue;
 
-    scan(&Token);		// Get the filename in Text
+    scan(&Token);			// Get the filename in Text
     if (Token.token != T_STRLIT)
       fatals("Expecting pre-processor file name, got:", Text);
 
-    if (Text[0] != '<') {	// If this is a real filename
+    if (Text[0] != '<') {		// If this is a real filename
       if (strcmp(Text, Infilename))	// and not the one we have now
 	Infilename = strdup(Text);	// save it. Then update the line num
       Line = l;
     }
 
-    while ((c = fgetc(Infile)) != '\n');	// Skip to the end of the line
-    c = fgetc(Infile);		// and get the next character
-    Linestart = 1;		// Now back at the start of the line
+    while ((c = fgetc(Infile)) != '\n'); // Skip to the end of the line
+    c = fgetc(Infile);			// and get the next character
+    Linestart = 1;			// Now back at the start of the line
   }
 
-  Linestart = 0;		// No longer at the start of the line
+  Linestart = 0;			// No longer at the start of the line
   if ('\n' == c) {
-    Line++;			// Increment line count
-    Linestart = 1;		// Now back at the start of the line
+    Line++;				// Increment line count
+    Linestart = 1;			// Now back at the start of the line
   }
   return (c);
 }
@@ -177,6 +177,7 @@ static int scanint(int c) {
       radix = 8;
 
   }
+
   // Convert each character into an int value
   while ((k = chrpos("0123456789abcdef", tolower(c))) >= 0) {
     if (k >= radix)
@@ -204,7 +205,7 @@ static int scanstr(char *buf) {
       buf[i] = 0;
       return (i);
     }
-    buf[i] = (char) c;
+    buf[i] = (char)c;
   }
 
   // Ran out of buf[] space
@@ -224,7 +225,7 @@ static int scanident(int c, char *buf, int lim) {
     if (lim - 1 == i) {
       fatal("Identifier too long");
     } else if (i < lim - 1) {
-      buf[i++] = (char) c;
+      buf[i++] = (char)c;
     }
     c = next();
   }
@@ -343,6 +344,7 @@ int scan(struct token *t) {
     Peektoken.token = 0;
     return (1);
   }
+
   // Skip whitespace
   c = skip();
 
@@ -522,10 +524,12 @@ int scan(struct token *t) {
 	  t->token = tokentype;
 	  break;
 	}
+
 	// Not a recognised keyword, so it must be an identifier
 	t->token = T_IDENT;
 	break;
       }
+
       // The character isn't part of any recognised token, error
       fatalc("Unrecognised character", c);
   }

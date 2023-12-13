@@ -54,13 +54,14 @@ struct ASTnode *modify_type(struct ASTnode *tree, int rtype,
   ltype = tree->type;
 
   // For A_LOGOR and A_LOGAND, both types have to be int or pointer types
-  if (op == A_LOGOR || op == A_LOGAND) {
+  if (op==A_LOGOR || op==A_LOGAND) {
     if (!inttype(ltype) && !ptrtype(ltype))
-      return (NULL);
+      return(NULL);
     if (!inttype(ltype) && !ptrtype(rtype))
-      return (NULL);
+      return(NULL);
     return (tree);
   }
+
   // XXX No idea on these yet
   if (ltype == P_STRUCT || ltype == P_UNION)
     fatal("Don't know how to do this yet");
@@ -86,6 +87,7 @@ struct ASTnode *modify_type(struct ASTnode *tree, int rtype,
     if (rsize > lsize)
       return (mkastunary(A_WIDEN, rtype, NULL, tree, NULL, 0));
   }
+
   // For pointers
   if (ptrtype(ltype) && ptrtype(rtype)) {
     // We can compare them
@@ -97,8 +99,10 @@ struct ASTnode *modify_type(struct ASTnode *tree, int rtype,
     if (op == 0 && (ltype == rtype || ltype == pointer_to(P_VOID)))
       return (tree);
   }
+
   // We can scale only on add and subtract operations
-  if (op == A_ADD || op == A_SUBTRACT || op == A_ASPLUS || op == A_ASMINUS) {
+  if (op == A_ADD || op == A_SUBTRACT ||
+      op == A_ASPLUS || op == A_ASMINUS) {
 
     // Left is int type, right is pointer type and the size
     // of the original type is >1: scale the left
@@ -107,10 +111,10 @@ struct ASTnode *modify_type(struct ASTnode *tree, int rtype,
       if (rsize > 1)
 	return (mkastunary(A_SCALE, rtype, rctype, tree, NULL, rsize));
       else
-	// No need to scale, but we need to widen to pointer size
-	return (mkastunary(A_WIDEN, rtype, NULL, tree, NULL, 0));
+	return (tree);		// Size 1, no need to scale
     }
   }
+
   // If we get here, the types are not compatible
   return (NULL);
 }
