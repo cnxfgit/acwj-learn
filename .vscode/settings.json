@@ -7,5 +7,12 @@
         "defs.h": "c",
         "stdlib.h": "c",
         "stddef.h": "c"
-    }
+    },
+    "makefile.launchConfigurations": [
+        {
+            "cwd": "/home/ubuntu/acwj-learn",
+            "binaryPath": "/home/ubuntu/acwj-learn/cwj",
+            "binaryArgs": []
+        }
+    ]
 }
